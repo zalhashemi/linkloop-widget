@@ -10,7 +10,6 @@ struct Item: Codable {
     var file: String
     var index: Int?   // position inside a multi-photo X post (1-based)
     var total: Int?
-    var small: Bool?  // true once the cached file has been through Resolver.compress
 }
 
 final class Store {
@@ -34,7 +33,7 @@ final class Store {
         let kept = items.filter { FileManager.default.fileExists(atPath: fileURL($0).path) }
         guard kept.count != items.count else { return false }
         items = kept
-        save()
+        try? save()
         return true
     }
 
@@ -42,36 +41,27 @@ final class Store {
     func fileURL(_ item: Item) -> URL { cache.appendingPathComponent(item.file) }
 
     func add(link: String, data: Data, ext: String, index: Int? = nil, total: Int? = nil) throws {
-        let item = Item(link: link, file: UUID().uuidString + "." + ext, index: index, total: total, small: true)
+        let item = Item(link: link, file: UUID().uuidString + "." + ext, index: index, total: total)
         try data.write(to: fileURL(item), options: .atomic)
         items.append(item)
-        save()
+        do { try save() } catch {
+            items.removeLast()
+            try? FileManager.default.removeItem(at: fileURL(item))
+            throw error
+        }
     }
 
     func remove(at i: Int) {
         guard items.indices.contains(i) else { return }
         try? FileManager.default.removeItem(at: fileURL(items[i]))
         items.remove(at: i)
-        save()
+        try? save()
     }
 
-    /// Swap an old cached file for its compressed version (nil = keep it, just mark it done).
-    func replace(file: String, with data: Data?) {
-        guard let i = items.firstIndex(where: { $0.file == file }) else { return }  // removed meanwhile
-        if let data {
-            let name = UUID().uuidString + ".jpg"
-            guard (try? data.write(to: cache.appendingPathComponent(name), options: .atomic)) != nil else { return }
-            try? FileManager.default.removeItem(at: fileURL(items[i]))
-            items[i].file = name
-        }
-        items[i].small = true
-        save()
-    }
-
-    private func save() {
+    private func save() throws {
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]
-        try? enc.encode(items).write(to: json, options: .atomic)
+        try enc.encode(items).write(to: json, options: .atomic)
     }
 }
 
@@ -147,11 +137,7 @@ enum Resolver {
 
     /// X: every photo via fxtwitter's JSON API, each stored as .../status/ID/photo/N.
     static func resolveX(_ url: URL) async throws -> [Candidate] {
-        let p = url.pathComponents  // ["/", user, "status", id, "photo", "2"]
-        guard let s = p.firstIndex(of: "status"), s + 1 < p.count, Int(p[s + 1]) != nil else { throw LinkError.noImage }
-        let id = p[s + 1]
-        let user = s >= 2 && p[s - 1] != "web" ? p[s - 1] : "i"
-        let wanted = s + 3 < p.count && p[s + 2] == "photo" ? Int(p[s + 3]) : nil
+        guard let (user, id, wanted) = xPost(url) else { throw LinkError.noImage }
 
         var photos: [URL]
         do {
@@ -175,6 +161,15 @@ enum Resolver {
             Candidate(link: "https://x.com/\(user)/status/\(id)/photo/\($0.n)", image: $0.url,
                       index: total > 1 ? $0.n : nil, total: total > 1 ? total : nil)
         }
+    }
+
+    /// x.com/user/status/123/photo/2 -> ("user", "123", 2). Photo is nil for a whole-post link.
+    static func xPost(_ url: URL) -> (user: String, id: String, photo: Int?)? {
+        let p = url.pathComponents  // ["/", user, "status", id, "photo", "2"]
+        guard let s = p.firstIndex(of: "status"), s + 1 < p.count, Int(p[s + 1]) != nil else { return nil }
+        let user = s >= 2 && p[s - 1] != "web" ? p[s - 1] : "i"
+        let photo = s + 3 < p.count && p[s + 2] == "photo" ? Int(p[s + 3]) : nil
+        return (user, p[s + 1], photo)
     }
 
     static func fetch(_ url: URL, ua: String) async throws -> (Data, HTTPURLResponse) {
@@ -221,9 +216,15 @@ enum Resolver {
 
     static func downloadImage(_ url: URL, ua: String) async throws -> (Data, String) {
         let (data, resp) = try await fetch(url, ua: ua)
-        guard NSImage(data: data) != nil else { throw LinkError.notImage }
+        guard let prepared = prepare(data, mime: resp.mimeType) else { throw LinkError.notImage }
+        return prepared
+    }
+
+    /// nil if the bytes aren't a readable image; otherwise the bytes to cache (shrunk when that helps) and their extension.
+    static func prepare(_ data: Data, mime: String? = nil) -> (Data, String)? {
+        guard NSImage(data: data) != nil else { return nil }
         if let small = compress(data) { return (small, "jpg") }
-        return (data, imageExtension(data, mime: resp.mimeType))
+        return (data, imageExtension(data, mime: mime))
     }
 
     /// Longest side capped at 1400px (widget tops out at 1080px on Retina), JPEG quality 0.7.
@@ -395,6 +396,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var timer: Timer?
     var busy = 0
     var note: String?
+    var wantVisible = true        // the user's Show/Hide choice
+    var hiddenForFullScreen = false
+    var fullScreenPoll: Timer?
     let intervals = [60, 180, 300, 600]  // seconds
     let loginItem = NSMenuItem(title: "Launch at login", action: #selector(toggleLogin), keyEquivalent: "")
 
@@ -431,7 +435,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         buildWidget()
         display(animated: false)
         restartTimer()
-        compressOldImages()
+        let ws = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.activeSpaceDidChangeNotification, NSWorkspace.didActivateApplicationNotification] {
+            ws.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                // Check again once the full-screen animation has finished.
+                for delay in [0.3, 1.0] {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { MainActor.assumeIsolated { self?.updateFullScreen() } }
+                }
+            }
+        }
         // Turn launch-at-login on once by default; after that the menu toggle decides.
         if !UserDefaults.standard.bool(forKey: "loginDefaultApplied"), Bundle.main.bundlePath.hasSuffix(".app") {
             UserDefaults.standard.set(true, forKey: "loginDefaultApplied")
@@ -452,18 +464,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             alert.informativeText = "\(error.localizedDescription)\n\nYou can also add LinkLoop in System Settings → General → Login Items."
             NSApp.activate(ignoringOtherApps: true)
             alert.runModal()
-        }
-    }
-
-    /// One-time background pass over images saved before compression existed.
-    func compressOldImages() {
-        let todo = store.items.filter { $0.small != true }.map { (file: $0.file, url: store.fileURL($0)) }
-        guard !todo.isEmpty else { return }
-        Task.detached(priority: .background) {
-            for t in todo {
-                let small = (try? Data(contentsOf: t.url)).flatMap { Resolver.compress($0) }
-                await MainActor.run { self.store.replace(file: t.file, with: small) }
-            }
         }
     }
 
@@ -557,7 +557,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         widgetMenuItem.submenu = widgetMenu()
-        showItem.state = panel.isVisible ? .on : .off
+        showItem.state = wantVisible ? .on : .off
         shuffleItem.state = shuffle ? .on : .off
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         for i in intervalMenu.items { i.state = Double(i.tag) == interval ? .on : .off }
@@ -611,7 +611,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         } else {
             panel.level = .floating
-            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+            panel.collectionBehavior = [.canJoinAllSpaces]
         }
         if panel.isVisible { panel.orderFrontRegardless() }
     }
@@ -645,7 +645,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func advance() {
         let n = store.items.count
-        guard n > 1 else { return }
+        guard n > 1, wantVisible, !hiddenForFullScreen else { return }
         if shuffle {
             var next = current
             while next == current { next = Int.random(in: 0..<n) }
@@ -708,11 +708,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     let (data, ext) = try await Resolver.download(c)
                     got.append((c, data, ext))
                 }
-                for (c, data, ext) in got where !store.contains(c.link) {
+                var added = 0
+                for (c, data, ext) in got where !store.contains(c.link) {  // may have been added meanwhile
                     try store.add(link: c.link, data: data, ext: ext, index: c.index, total: c.total)
+                    added += 1
                 }
                 if fresh.count < found.count { setNote("Added \(fresh.count), \(found.count - fresh.count) already saved") }
-                showNewest(got.count)
+                showNewest(added)
             } catch {
                 showError(error)
             }
@@ -720,24 +722,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func addFiles(_ urls: [URL]) {
-        var added = 0
-        for url in urls {
-            let link = url.absoluteString
-            if store.contains(link) { setNote("Already added"); continue }
-            guard let data = try? Data(contentsOf: url), NSImage(data: data) != nil else {
-                showError(LinkError.notImage)
-                continue
+        busy += 1
+        updateStatus()
+        Task {
+            defer { busy -= 1; updateStatus() }
+            var added = 0
+            for url in urls {
+                let link = url.absoluteString
+                if store.contains(link) { setNote("Already added"); continue }
+                // Decoding and shrinking big photos is slow: keep it off the main thread.
+                let prepared = await Task.detached { (try? Data(contentsOf: url)).flatMap { Resolver.prepare($0) } }.value
+                guard let (data, ext) = prepared else { showError(LinkError.notImage); continue }
+                do {
+                    try store.add(link: link, data: data, ext: ext)
+                    added += 1
+                } catch { showError(error) }
             }
-            do {
-                if let small = Resolver.compress(data) {
-                    try store.add(link: link, data: small, ext: "jpg")
-                } else {
-                    try store.add(link: link, data: data, ext: Resolver.imageExtension(data, mime: nil))
-                }
-                added += 1
-            } catch { showError(error) }
+            showNewest(added)
         }
-        showNewest(added)
     }
 
     func showNewest(_ added: Int) {
@@ -770,7 +772,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func toggleWidget() {
-        if panel.isVisible { panel.orderOut(nil) } else { panel.orderFrontRegardless() }
+        wantVisible.toggle()
+        if wantVisible && !hiddenForFullScreen { panel.orderFrontRegardless() } else { panel.orderOut(nil) }
+    }
+
+    /// Hide while another app is full screen (video, game, slideshow) on the widget's display; show again after.
+    func updateFullScreen() {
+        let covered = fullScreenAppCoversWidget()
+        guard covered != hiddenForFullScreen else { return }
+        hiddenForFullScreen = covered
+        if covered { panel.orderOut(nil) } else if wantVisible { panel.orderFrontRegardless() }
+        // Leaving full screen doesn't always send a notification (e.g. in-window video players), so poll only while hidden.
+        fullScreenPoll?.invalidate()
+        fullScreenPoll = covered ? Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateFullScreen() }
+        } : nil
+    }
+
+    func fullScreenAppCoversWidget() -> Bool {
+        guard let screen = panel.screen ?? NSScreen.main, let mainHeight = NSScreen.screens.first?.frame.height else { return false }
+        let f = screen.frame  // AppKit coords (origin bottom-left) -> window-list coords (origin top-left)
+        let whole = CGRect(x: f.minX, y: mainHeight - f.maxY, width: f.width, height: f.height)
+        let top = screen.safeAreaInsets.top.rounded()  // notched Macs put full-screen apps below the notch
+        let belowNotch = CGRect(x: whole.minX, y: whole.minY + top, width: whole.width, height: whole.height - top)
+        let me = ProcessInfo.processInfo.processIdentifier
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        // The Dock's window leaves the screen in a full-screen Space, so a maximized window (same size below the notch) doesn't count.
+        let dockShowing = windows.contains { ($0[kCGWindowOwnerName as String] as? String) == "Dock" && ($0[kCGWindowLayer as String] as? Int) == 20 }
+        func same(_ a: CGRect, _ b: CGRect) -> Bool { a.insetBy(dx: -1, dy: -1).contains(b) && b.insetBy(dx: -1, dy: -1).contains(a) }
+        return windows.contains { w in
+            guard (w[kCGWindowLayer as String] as? Int) == 0, (w[kCGWindowOwnerPID as String] as? Int32) != me,
+                  let b = w[kCGWindowBounds as String] as? NSDictionary,
+                  let r = CGRect(dictionaryRepresentation: b) else { return false }
+            return same(r, whole) || (same(r, belowNotch) && !dockShowing)
+        }
     }
 
     @objc func nextImage() {
@@ -808,6 +843,10 @@ if let i = CommandLine.arguments.firstIndex(of: "--selftest") {
     precondition(Resolver.findOGImage("<p>nothing</p>", base: base) == nil)
     precondition(Resolver.pinterestOriginal(URL(string: "https://i.pinimg.com/736x/bf/36/x.jpg")!)?.absoluteString
            == "https://i.pinimg.com/originals/bf/36/x.jpg")
+    let xp = Resolver.xPost(URL(string: "https://x.com/NASA/status/123/photo/3")!)
+    precondition(xp?.user == "NASA" && xp?.id == "123" && xp?.photo == 3)
+    precondition(Resolver.xPost(URL(string: "https://twitter.com/i/web/status/9")!).map { $0.user == "i" && $0.photo == nil } == true)
+    precondition(Resolver.xPost(URL(string: "https://x.com/NASA")!) == nil)
     precondition(Resolver.parse("not a link") == nil && Resolver.parse("ftp://a.b/c") == nil)
     print("parser checks passed")
 

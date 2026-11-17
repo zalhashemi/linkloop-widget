@@ -2,6 +2,10 @@
 
 A tiny macOS menu bar app that turns links into a looping photo widget.
 
+![The LinkLoop widget showing a photo of Earth, next to the open LinkLoop menu bar menu](docs/screenshot.jpg)
+
+<sub>Illustration of the widget and menu. Sample photo: "The Blue Marble", NASA / Apollo 17, public domain.</sub>
+
 Copy a link to a Pinterest pin, an X (Twitter) post, an Instagram post or any image, click the menu bar icon, and choose **Add link from clipboard**. LinkLoop saves the image on your Mac and shows it in a small widget that slowly cycles through everything you've added.
 
 - Native Swift + AppKit, one source file, no dependencies, no accounts, no API keys
@@ -14,6 +18,7 @@ Copy a link to a Pinterest pin, an X (Twitter) post, an Instagram post or any im
 - **X posts with several photos** add every photo, each with a small `2/4`-style badge. A `…/photo/3` link adds just that photo.
 - **Widget** with zoom-to-fill or fit, size presets (Small, Medium, Large, Extra large) plus free resizing from the bottom-right corner, and a fade between images
 - **Placement:** float above all windows, or keep it on the desktop behind your windows like Apple's desktop widgets
+- **Stays out of the way:** the widget hides automatically while a video, game or any other app is full screen, and comes back when you leave full screen
 - **Interval** of 1, 3, 5 or 10 minutes, with optional shuffle
 - **Click** the widget to open the original post. **Right-click** it for Next, Remove, Hide and widget options.
 - **Launch at login** (on by default, can be turned off in the menu)

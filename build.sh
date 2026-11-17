@@ -23,5 +23,5 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
-codesign --force --deep -s - "$APP"
+codesign --force -s - "$APP"
 echo "Built $APP. Run: open $APP"
