@@ -35,7 +35,7 @@ Copy a link to a Pinterest pin, an X (Twitter) post, an Instagram post or any im
 
 ## Download
 
-1. Download `LinkLoop-1.0.0.zip` from the [latest release](https://github.com/zalhashemi/linkloop-widget/releases/latest). It runs on Apple Silicon and Intel Macs.
+1. Download `LinkLoop-1.1.0.zip` from the [latest release](https://github.com/zalhashemi/linkloop-widget/releases/latest). It runs on Apple Silicon and Intel Macs.
 2. Unzip it and drag `LinkLoop.app` into your Applications folder.
 3. Open it. LinkLoop isn't notarized by Apple (that needs a paid developer account), so the first time macOS will say it can't verify the app:
    - **macOS 15 Sequoia or later:** click **Done**, then go to System Settings → Privacy & Security, scroll down and click **Open Anyway** next to LinkLoop.
