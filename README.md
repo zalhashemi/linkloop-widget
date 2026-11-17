@@ -6,7 +6,7 @@ A tiny macOS menu bar app that turns links into a looping photo widget.
 
 <sub>Illustration of the widget and menu. Sample photo: "The Blue Marble", NASA / Apollo 17, public domain.</sub>
 
-Copy a link to a Pinterest pin, an X (Twitter) post, an Instagram post or any image, click the menu bar icon, and choose **Add link from clipboard**. LinkLoop saves the image on your Mac and shows it in a small widget that slowly cycles through everything you've added.
+Copy a link to a Pinterest pin, an X (Twitter) post, an Instagram post or any image, click the menu bar icon, and choose **Add from clipboard**. LinkLoop saves the image on your Mac and shows it in a small widget that slowly cycles through everything you've added.
 
 - Native Swift + AppKit, one source file, no dependencies, no accounts, no API keys
 - Images are cached locally, so the loop keeps working offline or if the post is deleted
@@ -14,7 +14,7 @@ Copy a link to a Pinterest pin, an X (Twitter) post, an Instagram post or any im
 
 ## Features
 
-- **Add images** from the clipboard, by typing or pasting a link, from an image file on your Mac, or by dragging a link or file onto the widget
+- **Add images** from the clipboard (a link, a copied image or a screenshot), by typing or pasting a link, from an image file on your Mac, or by dragging a link or file onto the widget
 - **X posts with several photos** add every photo, each with a small `2/4`-style badge. A `…/photo/3` link adds just that photo.
 - **Widget** with zoom-to-fill or fit, size presets (Small, Medium, Large, Extra large) plus free resizing from the bottom-right corner, and a fade between images
 - **Placement:** float above all windows, or keep it on the desktop behind your windows like Apple's desktop widgets
@@ -67,11 +67,11 @@ If you move the app after its first launch, open the menu and click **Launch at 
 
 1. Copy a link (for example a Pinterest pin or an X post with a photo).
 2. Click the LinkLoop icon in the menu bar.
-3. Choose **Add link from clipboard**, or press `v` while the menu is open.
+3. Choose **Add from clipboard**, or press `v` while the menu is open.
 
 | Menu item | What it does |
 |---|---|
-| Add link from clipboard | Adds the link you copied |
+| Add from clipboard | Adds the link, image or image file you copied |
 | Add link… | Lets you type or paste a link |
 | Add image file… | Adds pictures saved on your Mac (useful when Instagram blocks a link) |
 | Show widget | Shows or hides the widget |

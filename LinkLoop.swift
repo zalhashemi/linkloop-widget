@@ -265,7 +265,7 @@ final class WidgetPanel: NSPanel {
 final class WidgetView: NSView {
     weak var app: AppDelegate?
     let photo = NSView()  // plain layer: NSImageView can't aspect-fill
-    let placeholder = NSTextField(wrappingLabelWithString: "Copy a link, then use the menu bar icon → Add link from clipboard")
+    let placeholder = NSTextField(wrappingLabelWithString: "Copy a link, then use the menu bar icon → Add from clipboard")
     let badge = NSTextField(labelWithString: "")
     private var downPoint: NSPoint?
     private var dragged = false
@@ -481,7 +481,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.delegate = self
         menu.addItem(statusLine)
         menu.addItem(.separator())
-        let paste = item("Add link from clipboard", #selector(addFromClipboard), "v")
+        let paste = item("Add from clipboard", #selector(addFromClipboard), "v")
         paste.keyEquivalentModifierMask = []
         menu.addItem(paste)
         menu.addItem(item("Add link…", #selector(addLinkPrompt)))
@@ -665,7 +665,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: Actions
 
     @objc func addFromClipboard() {
-        addLink(NSPasteboard.general.string(forType: .string) ?? "")
+        let pb = NSPasteboard.general
+        if let files = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !files.isEmpty {
+            return addFiles(files)  // files copied in Finder
+        }
+        let text = pb.string(forType: .string) ?? ""
+        // A link wins (it keeps click-to-open); otherwise take copied image bytes, e.g. a screenshot or "Copy Image".
+        if Resolver.parse(text) == nil, let data = pb.data(forType: .png) ?? pb.data(forType: .tiff) {
+            return addImageData(data)
+        }
+        addLink(text)
+    }
+
+    func addImageData(_ raw: Data) {
+        busy += 1
+        updateStatus()
+        Task {
+            defer { busy -= 1; updateStatus() }
+            let prepared = await Task.detached { Resolver.prepare(raw) }.value
+            guard let (data, ext) = prepared else { return showError(LinkError.notImage) }
+            do {
+                // No source link to open, so a unique non-http key (openCurrentLink ignores it).
+                try store.add(link: "pasted:" + UUID().uuidString, data: data, ext: ext)
+                showNewest(1)
+            } catch { showError(error) }
+        }
     }
 
     @objc func addLinkPrompt() {
