@@ -1,0 +1,9 @@
+# Build output
+LinkLoop.app/
+LinkLoop
+
+# macOS
+.DS_Store
+
+# Personal planning notes
+PLAN.md
