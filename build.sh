@@ -5,7 +5,13 @@ cd "$(dirname "$0")"
 APP=LinkLoop.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
-swiftc -O -target "$(uname -m)-apple-macos13" LinkLoop.swift -o "$APP/Contents/MacOS/LinkLoop"
+# One binary for Apple Silicon and Intel.
+TMP=$(mktemp -d)
+for ARCH in arm64 x86_64; do
+  swiftc -O -target "$ARCH-apple-macos13" LinkLoop.swift -o "$TMP/LinkLoop-$ARCH"
+done
+lipo -create "$TMP"/LinkLoop-* -output "$APP/Contents/MacOS/LinkLoop"
+rm -rf "$TMP"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -15,7 +21,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIdentifier</key><string>com.local.linkloop</string>
   <key>CFBundleExecutable</key><string>LinkLoop</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>CFBundleShortVersionString</key><string>1.0.0</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>LSUIElement</key><true/>
